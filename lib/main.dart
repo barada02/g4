@@ -3,13 +3,6 @@ import 'services/gemma_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  try {
-    await GemmaService.instance.init();
-  } catch (e) {
-    debugPrint('Failed to initialize Gemma: $e');
-  }
-
   runApp(const MyApp());
 }
 
@@ -50,6 +43,7 @@ class _ChatPageState extends State<ChatPage> {
   bool _isGenerating = false;
   String _status = 'Initializing Gemma...';
   String _responseBuffer = '';
+  int _downloadProgress = 0;
 
   @override
   void initState() {
@@ -59,9 +53,19 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _initializeModel() async {
     try {
-      // Wait a moment for service initialization from main
+      // Initialize service with download progress callback
+      await GemmaService.instance.init(
+        onDownloadProgress: (progress) {
+          setState(() {
+            _downloadProgress = progress;
+            _status = 'Downloading model... $_downloadProgress%';
+          });
+        },
+      );
+
+      // Small delay to ensure initialization completes
       await Future.delayed(const Duration(milliseconds: 500));
-      
+
       // Check if model initialized successfully
       if (GemmaService.instance.isInitialised) {
         setState(() {
@@ -185,9 +189,33 @@ class _ChatPageState extends State<ChatPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const CircularProgressIndicator(),
+              const CircularProgressIndicator(
+                strokeWidth: 3,
+              ),
+              const SizedBox(height: 30),
+              Text(
+                _status,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16),
+              ),
               const SizedBox(height: 20),
-              Text(_status),
+              if (_downloadProgress > 0 && _downloadProgress < 100)
+                SizedBox(
+                  width: 200,
+                  child: Column(
+                    children: [
+                      LinearProgressIndicator(
+                        value: _downloadProgress / 100,
+                        minHeight: 8,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '$_downloadProgress%',
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
