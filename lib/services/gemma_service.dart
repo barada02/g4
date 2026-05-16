@@ -1,9 +1,6 @@
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter/foundation.dart';
 
-// Direct model URL (no authentication needed)
-const String modelUrl = 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
-
 /// Core AI model service using Gemma with streaming support
 class GemmaService {
   GemmaService._internal();
@@ -11,22 +8,31 @@ class GemmaService {
 
   final _gemma = FlutterGemmaPlugin.instance;
   dynamic _model;
+  dynamic _chat;
   bool _initialised = false;
   final List<Map<String, String>> _chatHistory = [];
 
   bool get isInitialised => _initialised;
 
-  /// Initialize Gemma model from direct download URL
+  /// Initialize Gemma model - flutter_gemma handles model loading internally
   Future<void> init() async {
     if (_initialised) return;
 
     try {
       debugPrint('📥 Initializing Gemma 4 E2B model...');
       
-      // Create model using flutter_gemma API
+      // Create model instance - flutter_gemma plugin handles model setup
       _model = await _gemma.createModel(
         modelType: ModelType.gemmaIt,
         maxTokens: 2048,
+      );
+
+      // Create chat session from the model
+      _chat = await _model.createChat(
+        randomSeed: 42,
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
       );
 
       _initialised = true;
@@ -44,7 +50,7 @@ class GemmaService {
     required Function(String) onToken,
     required Function(MessageStats) onComplete,
   }) async {
-    if (!_initialised || _model == null) {
+    if (!_initialised || _chat == null) {
       throw Exception('GemmaService not initialized');
     }
 
@@ -54,17 +60,12 @@ class GemmaService {
       int tokenCount = 0;
       final buffer = StringBuffer();
 
-      // Add user message to history
-      _chatHistory.add({'role': 'user', 'content': text});
+      // Add user message to chat
+      await _chat.addMessage(text);
 
-      // Build chat context from history
-      final prompt = _buildChatPrompt();
-
-      // Generate response with streaming
-      await _model.generateResponse(
-        prompt: prompt,
-        streaming: true,
-        onToken: (token) {
+      // Stream response token by token
+      await _chat.streamResponse(
+        (token) {
           firstTokenTime ??= DateTime.now();
           tokenCount++;
           buffer.write(token);
@@ -74,7 +75,8 @@ class GemmaService {
 
       final response = buffer.toString();
       
-      // Add assistant response to history
+      // Store in history for context
+      _chatHistory.add({'role': 'user', 'content': text});
       _chatHistory.add({'role': 'assistant', 'content': response});
 
       final stats = MessageStats(
@@ -89,27 +91,18 @@ class GemmaService {
     }
   }
 
-  /// Build chat prompt from history
-  String _buildChatPrompt() {
-    final buffer = StringBuffer();
-    
-    for (final msg in _chatHistory) {
-      final role = msg['role'] == 'user' ? 'user' : 'model';
-      buffer.writeln('$role: ${msg['content']}');
-    }
-    
-    buffer.write('model: ');
-    return buffer.toString();
-  }
-
   /// Clear chat session
-  void clearChat() {
+  Future<void> clearChat() async {
+    if (_chat != null) {
+      await _chat.clear();
+    }
     _chatHistory.clear();
-    debugPrint('🗑️ Chat history cleared');
+    debugPrint('🗑️ Chat cleared');
   }
 
   /// Cleanup resources
   Future<void> dispose() async {
+    _chat = null;
     _model = null;
     _chatHistory.clear();
     _initialised = false;
