@@ -1,5 +1,5 @@
 name: g4
-description: "A new Flutter project."
+description: "Gemma 4 On-Device AI Chat Application for Android."
 publish_to: 'none'
 version: 0.1.0
 
@@ -7,11 +7,12 @@ environment:
   sdk: ^3.10.1
 
 dependencies:
-  dio: ^5.9.2
   flutter:
     sdk: flutter
-  flutter_litert: ^2.5.2
+  flutter_gemma: ^0.12.6
   path_provider: ^2.1.5
+  permission_handler: ^11.3.0
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
