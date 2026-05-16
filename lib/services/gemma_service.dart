@@ -10,18 +10,23 @@ class GemmaService {
   dynamic _model;
   dynamic _chat;
   bool _initialised = false;
-  final List<Map<String, String>> _chatHistory = [];
+  bool _initializationAttempted = false;
+  String? _initError;
 
   bool get isInitialised => _initialised;
+  String? get initError => _initError;
+  bool get initializationAttempted => _initializationAttempted;
 
-  /// Initialize Gemma model - flutter_gemma handles model loading internally
+  /// Initialize Gemma model - requires model to be installed on device
+  /// The flutter_gemma plugin handles model discovery automatically
   Future<void> init() async {
-    if (_initialised) return;
+    if (_initializationAttempted) return;
+    _initializationAttempted = true;
 
     try {
       debugPrint('📥 Initializing Gemma 4 E2B model...');
       
-      // Create model instance - flutter_gemma plugin handles model setup
+      // Try to create model - flutter_gemma plugin discovers installed models
       _model = await _gemma.createModel(
         modelType: ModelType.gemmaIt,
         maxTokens: 2048,
@@ -36,11 +41,18 @@ class GemmaService {
       );
 
       _initialised = true;
-      _chatHistory.clear();
+      _initError = null;
       debugPrint('✅ GemmaService initialized successfully');
     } catch (e) {
+      _initError = e.toString();
+      _initialised = false;
       debugPrint('❌ GemmaService initialization error: $e');
-      rethrow;
+      
+      // Show helpful message about model setup
+      if (e.toString().contains('No active inference model')) {
+        debugPrint('⚠️ Model not found. The Gemma model needs to be installed on your device.');
+        debugPrint('ℹ️ Please install the model through the flutter_gemma setup process.');
+      }
     }
   }
 
@@ -51,7 +63,7 @@ class GemmaService {
     required Function(MessageStats) onComplete,
   }) async {
     if (!_initialised || _chat == null) {
-      throw Exception('GemmaService not initialized');
+      throw Exception('GemmaService not initialized. Error: $_initError');
     }
 
     try {
@@ -74,10 +86,6 @@ class GemmaService {
       );
 
       final response = buffer.toString();
-      
-      // Store in history for context
-      _chatHistory.add({'role': 'user', 'content': text});
-      _chatHistory.add({'role': 'assistant', 'content': response});
 
       final stats = MessageStats(
         totalTokens: tokenCount,
@@ -96,7 +104,6 @@ class GemmaService {
     if (_chat != null) {
       await _chat.clear();
     }
-    _chatHistory.clear();
     debugPrint('🗑️ Chat cleared');
   }
 
@@ -104,7 +111,6 @@ class GemmaService {
   Future<void> dispose() async {
     _chat = null;
     _model = null;
-    _chatHistory.clear();
     _initialised = false;
     debugPrint('🛑 GemmaService disposed');
   }

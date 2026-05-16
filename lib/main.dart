@@ -59,43 +59,72 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _initializeModel() async {
     try {
-      // Service already initialized in main, check if ready
+      // Wait a moment for service initialization from main
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      // Check if model initialized successfully
       if (GemmaService.instance.isInitialised) {
         setState(() {
           _isInitializing = false;
           _status = 'Gemma 4 Ready ✅';
           _messages.add(ChatMessage(
             isUser: false,
-            content: 'Hi! I\'m Gemma 4 E2B. Ask me anything about any topic!',
+            content: 'Hi! I\'m Gemma 4 E2B. Ask me anything!',
           ));
         });
       } else {
+        // Show initialization error with helpful message
+        final error = GemmaService.instance.initError ?? 'Unknown error';
         setState(() {
           _isInitializing = false;
-          _status = 'Model not available';
+          _status = 'Model Setup Required';
+          _messages.add(ChatMessage(
+            isUser: false,
+            content: '⚠️ Model not available.\n\n'
+                'The Gemma 4 E2B model needs to be installed on your device.\n\n'
+                'Error: $error\n\n'
+                'Please ensure the flutter_gemma plugin is properly configured.',
+          ));
         });
       }
     } catch (e) {
       setState(() {
         _isInitializing = false;
-        _status = 'Error: $e';
+        _status = 'Initialization Error';
+        _messages.add(ChatMessage(
+          isUser: false,
+          content: '❌ Failed to initialize chat app.\n\nError: $e',
+        ));
       });
     }
   }
 
   void _scrollToBottom() {
     Future.microtask(() {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+      if (_scrollController.positions.isNotEmpty) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
     });
   }
 
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
     if (text.isEmpty || _isGenerating) return;
+
+    // Check if model is initialized before sending
+    if (!GemmaService.instance.isInitialised) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('⚠️ Model not ready. Error: ${GemmaService.instance.initError}'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
 
     _controller.clear();
 
@@ -131,7 +160,7 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         _messages.add(ChatMessage(
           isUser: false,
-          content: 'Error: Failed to generate response. Please try again.',
+          content: '❌ Error: ${e.toString()}',
         ));
         _isGenerating = false;
         _responseBuffer = '';
