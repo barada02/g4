@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_gemma/flutter_gemma.dart';
 import 'services/gemma_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Initialize flutter_gemma plugin BEFORE using it
+  await FlutterGemma.initialize();
   runApp(const MyApp());
 }
 

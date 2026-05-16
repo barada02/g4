@@ -219,20 +219,21 @@ class GemmaService {
       int tokenCount = 0;
       final buffer = StringBuffer();
 
-      // Add user message to chat
-      await _chat.addMessage(text);
+      debugPrint('🚀 Sending: $text');
 
-      // Stream response token by token
-      await _chat.streamResponse(
-        (token) {
-          firstTokenTime ??= DateTime.now();
-          tokenCount++;
-          buffer.write(token);
-          onToken(token);
-        },
-      );
+      // Use the correct flutter_gemma API for streaming response
+      // The respond method returns a Stream<String> for token-by-token output
+      final tokenStream = _chat.respond(text);
+      
+      await for (final token in tokenStream) {
+        firstTokenTime ??= DateTime.now();
+        tokenCount++;
+        buffer.write(token);
+        onToken(token);
+      }
 
       final response = buffer.toString();
+      debugPrint('✅ Response complete: ${response.length} characters, $tokenCount tokens');
 
       final stats = MessageStats(
         totalTokens: tokenCount,
