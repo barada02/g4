@@ -354,10 +354,14 @@ class _ChatPageState extends State<ChatPage> {
                           child: isAssistantGenerating
                               ? Row(
                                   mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
-                                    Text(
-                                      msg.content,
-                                      style: const TextStyle(fontSize: 15),
+                                    Flexible(
+                                      child: Text(
+                                        msg.content,
+                                        style: const TextStyle(fontSize: 15),
+                                        softWrap: true,
+                                      ),
                                     ),
                                     const SizedBox(width: 8),
                                     SizedBox(
