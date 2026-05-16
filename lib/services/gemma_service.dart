@@ -21,12 +21,21 @@ class GemmaService {
   String? _initError;
   bool _isDownloading = false;
   int _downloadProgress = 0; // 0-100
+  String _downloadStatus = '';
 
   bool get isInitialised => _initialised;
   String? get initError => _initError;
   bool get initializationAttempted => _initializationAttempted;
   bool get isDownloading => _isDownloading;
   int get downloadProgress => _downloadProgress;
+  String get downloadStatus => _downloadStatus;
+
+  /// Update download progress for UI
+  void _updateProgress(int progress, String status) {
+    _downloadProgress = progress;
+    _downloadStatus = status;
+    debugPrint('📊 $status ($_downloadProgress%)');
+  }
 
   /// Download model from HuggingFace if not already present
   Future<String?> _downloadModelIfNeeded() async {
@@ -37,13 +46,17 @@ class GemmaService {
 
       // If model already exists locally, use it
       if (await modelFile.exists()) {
+        _updateProgress(100, 'Model found locally');
         debugPrint('✅ Model already downloaded at: $modelPath');
         return modelPath;
       }
 
-      debugPrint('📥 Starting model download from HuggingFace...');
+      _updateProgress(0, 'Starting model download...');
       _isDownloading = true;
-      _downloadProgress = 0;
+
+      debugPrint('📥 Downloading Gemma 4 E2B model...');
+      debugPrint('📍 URL: $modelUrl');
+      debugPrint('💾 Destination: $modelPath');
 
       // Download model file
       final request = http.Request('GET', Uri.parse(modelUrl));
@@ -51,73 +64,115 @@ class GemmaService {
 
       if (streamedResponse.statusCode != 200) {
         throw Exception(
-          'Failed to download model: ${streamedResponse.statusCode}',
+          'HTTP Error ${streamedResponse.statusCode}: Failed to download model',
         );
       }
 
       final totalSize = streamedResponse.contentLength ?? 0;
-      debugPrint('📦 Model size: ${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB');
+      if (totalSize <= 0) {
+        throw Exception('Unknown model size - cannot download');
+      }
 
-      final bytes = <int>[];
+      _updateProgress(1, 'Downloading (${(totalSize / 1024 / 1024).toStringAsFixed(1)} MB)');
+      debugPrint('📦 Total model size: ${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB');
+
+      // Stream directly to file without buffering to avoid OOM
+      final sink = modelFile.openWrite();
       int downloadedBytes = 0;
+      int lastProgressUpdate = 0;
 
-      // Stream the download with progress updates
-      await streamedResponse.stream.forEach((chunk) {
-        bytes.addAll(chunk);
-        downloadedBytes += chunk.length;
-        if (totalSize > 0) {
-          _downloadProgress = ((downloadedBytes / totalSize) * 100).toInt();
-          debugPrint(
-            '⬇️ Download progress: $_downloadProgress% '
-            '(${(downloadedBytes / 1024 / 1024).toStringAsFixed(2)} MB / '
-            '${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB)',
-          );
-        }
-      });
+      try {
+        // Stream the download directly to file
+        await streamedResponse.stream.forEach((chunk) {
+          sink.add(chunk);
+          downloadedBytes += chunk.length;
 
-      // Save to file
-      await modelFile.writeAsBytes(bytes);
-      debugPrint('✅ Model downloaded successfully: ${bytes.length} bytes');
-      debugPrint('💾 Model saved at: $modelPath');
+          // Update progress every 1% or at least every 5MB
+          int currentProgress = ((downloadedBytes / totalSize) * 100).toInt();
+          if (currentProgress - lastProgressUpdate >= 1 || 
+              (downloadedBytes - lastProgressUpdate * (totalSize ~/ 100)) >= 5 * 1024 * 1024) {
+            _updateProgress(
+              currentProgress,
+              'Downloading ${(downloadedBytes / 1024 / 1024).toStringAsFixed(1)}/'
+              '${(totalSize / 1024 / 1024).toStringAsFixed(1)} MB',
+            );
+            lastProgressUpdate = currentProgress;
+          }
+        });
+        
+        // Close the sink and wait for all data to be written
+        await sink.close();
+      } catch (e) {
+        await sink.close();
+        rethrow;
+      }
 
-      _downloadProgress = 100;
+      _updateProgress(100, 'Model downloaded successfully!');
       _isDownloading = false;
+      
+      debugPrint('✅ Model saved successfully: $downloadedBytes bytes');
+      debugPrint('📍 Model path: $modelPath');
+
       return modelPath;
     } catch (e) {
       _isDownloading = false;
       _downloadProgress = 0;
+      _downloadStatus = 'Download failed: $e';
       debugPrint('❌ Download error: $e');
       rethrow;
     }
   }
 
-  /// Initialize Gemma model - downloads if needed and configures flutter_gemma
-  Future<void> init({Function(int)? onDownloadProgress}) async {
+  /// Initialize Gemma model - downloads if needed
+  Future<void> init({Function(int, String)? onProgress}) async {
     if (_initializationAttempted) return;
     _initializationAttempted = true;
 
     try {
-      debugPrint('🚀 Initializing Gemma 4 E2B model...');
-
-      // Download model if not already present
-      debugPrint('📋 Checking for local model...');
+      // PHASE 1: Download model if needed (with UI updates)
+      _updateProgress(5, 'Checking for model...');
       final modelPath = await _downloadModelIfNeeded();
 
       if (modelPath == null) {
-        throw Exception('Failed to get model path');
+        throw Exception('Failed to obtain model path');
       }
 
-      debugPrint('⚙️ Configuring flutter_gemma with model at: $modelPath');
+      // Ensure download is fully complete
+      if (GemmaService.instance.isDownloading) {
+        throw Exception('Download still in progress - initialization delayed');
+      }
 
-      // Create model instance with the local model
-      _model = await _gemma.createModel(
-        modelType: ModelType.gemmaIt,
-        maxTokens: 2048,
-      );
+      // PHASE 2: Initialize model only AFTER download is 100% complete
+      _updateProgress(70, 'Setting up model...');
+      debugPrint('⚙️ Creating model instance...');
 
-      debugPrint('💬 Creating chat session...');
+      // Create model - flutter_gemma plugin will use the downloaded model
+      try {
+        _model = await _gemma.createModel(
+          modelType: ModelType.gemmaIt,
+          maxTokens: 2048,
+        );
+      } catch (e) {
+        // If createModel fails, try alternative initialization
+        debugPrint('⚠️ Primary initialization failed: $e');
+        debugPrint('🔄 Retrying with alternative method...');
+        
+        // Try to set the model path explicitly
+        try {
+          await _gemma.modelManager.setModelPath(modelPath);
+          _model = await _gemma.createModel(
+            modelType: ModelType.gemmaIt,
+            maxTokens: 2048,
+          );
+        } catch (e2) {
+          throw Exception('Failed to initialize model: $e2');
+        }
+      }
 
-      // Create chat session from the model
+      _updateProgress(85, 'Creating chat session...');
+      debugPrint('💬 Setting up chat...');
+
+      // Create chat session
       _chat = await _model.createChat(
         randomSeed: 42,
         temperature: 0.7,
@@ -125,20 +180,25 @@ class GemmaService {
         topP: 0.95,
       );
 
+      _updateProgress(100, 'Ready!');
       _initialised = true;
       _initError = null;
+      
       debugPrint('✅ GemmaService initialized successfully!');
+      debugPrint('🎉 Model is ready for chat');
     } catch (e) {
       _initError = e.toString();
       _initialised = false;
-      debugPrint('❌ GemmaService initialization error: $e');
+      _updateProgress(0, 'Initialization failed');
+      
+      debugPrint('❌ Initialization error: $e');
 
-      // Show helpful message about what went wrong
+      // Provide helpful diagnostics
       if (e.toString().contains('No active inference model')) {
-        debugPrint(
-          '⚠️ Model not activated. Make sure the flutter_gemma plugin '
-          'is properly installed.',
-        );
+        debugPrint('💡 The model needs to be properly registered with flutter_gemma');
+      } else if (e.toString().contains('Out of memory')) {
+        debugPrint('⚠️ Device ran out of memory during model loading');
+        debugPrint('💡 Try freeing up memory and restarting the app');
       }
     }
   }

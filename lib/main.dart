@@ -53,52 +53,73 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _initializeModel() async {
     try {
-      // Initialize service with download progress callback
-      await GemmaService.instance.init(
-        onDownloadProgress: (progress) {
+      // Kick off initialization in the background
+      // This will handle both download and model setup
+      Future.microtask(() async {
+        try {
+          // Initialize service - it will download model if needed, then set it up
+          await GemmaService.instance.init();
+
+          // After init() completes, check if it was successful
+          if (GemmaService.instance.isInitialised) {
+            setState(() {
+              _isInitializing = false;
+              _status = 'Gemma 4 Ready ✅';
+              _downloadProgress = 100;
+              _messages.add(ChatMessage(
+                isUser: false,
+                content: 'Hi! I\'m Gemma 4 E2B. Ask me anything!',
+              ));
+            });
+          } else {
+            // Show initialization error
+            final error = GemmaService.instance.initError ?? 'Unknown error';
+            setState(() {
+              _isInitializing = false;
+              _status = 'Model Setup Failed';
+              _downloadProgress = 0;
+              _messages.add(ChatMessage(
+                isUser: false,
+                content: '⚠️ Failed to initialize model.\n\n'
+                    'Error: $error\n\n'
+                    'Please restart the app and try again.',
+              ));
+            });
+          }
+        } catch (e) {
           setState(() {
-            _downloadProgress = progress;
-            _status = 'Downloading model... $_downloadProgress%';
+            _isInitializing = false;
+            _status = 'Initialization Error: $e';
+            _downloadProgress = 0;
+            _messages.add(ChatMessage(
+              isUser: false,
+              content: '⚠️ Initialization error: $e\n\n'
+                  'Please restart the app and try again.',
+            ));
           });
-        },
-      );
+        }
+      });
 
-      // Small delay to ensure initialization completes
-      await Future.delayed(const Duration(milliseconds: 500));
+      // Continuously update UI while downloading/initializing (500ms polling)
+      while (_isInitializing) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        setState(() {
+          _downloadProgress = GemmaService.instance.downloadProgress;
+          _status = GemmaService.instance.downloadStatus;
+        });
 
-      // Check if model initialized successfully
-      if (GemmaService.instance.isInitialised) {
-        setState(() {
-          _isInitializing = false;
-          _status = 'Gemma 4 Ready ✅';
-          _messages.add(ChatMessage(
-            isUser: false,
-            content: 'Hi! I\'m Gemma 4 E2B. Ask me anything!',
-          ));
-        });
-      } else {
-        // Show initialization error with helpful message
-        final error = GemmaService.instance.initError ?? 'Unknown error';
-        setState(() {
-          _isInitializing = false;
-          _status = 'Model Setup Required';
-          _messages.add(ChatMessage(
-            isUser: false,
-            content: '⚠️ Model not available.\n\n'
-                'The Gemma 4 E2B model needs to be installed on your device.\n\n'
-                'Error: $error\n\n'
-                'Please ensure the flutter_gemma plugin is properly configured.',
-          ));
-        });
+        // Exit polling if initialization completed
+        if (GemmaService.instance.isInitialised || 
+            GemmaService.instance.initError != null) {
+          break;
+        }
       }
     } catch (e) {
       setState(() {
         _isInitializing = false;
-        _status = 'Initialization Error';
-        _messages.add(ChatMessage(
-          isUser: false,
-          content: '❌ Failed to initialize chat app.\n\nError: $e',
-        ));
+        _status = 'Error: $e';
+        _downloadProgress = 0;
       });
     }
   }
@@ -191,27 +212,71 @@ class _ChatPageState extends State<ChatPage> {
             children: [
               const CircularProgressIndicator(
                 strokeWidth: 3,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
               ),
-              const SizedBox(height: 30),
+              const SizedBox(height: 40),
+              // Status text
               Text(
                 _status,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 16),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 30),
+              // Progress bar and percentage
               if (_downloadProgress > 0 && _downloadProgress < 100)
-                SizedBox(
-                  width: 200,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
                   child: Column(
                     children: [
-                      LinearProgressIndicator(
-                        value: _downloadProgress / 100,
-                        minHeight: 8,
+                      SizedBox(
+                        width: double.infinity,
+                        child: LinearProgressIndicator(
+                          value: _downloadProgress / 100,
+                          minHeight: 10,
+                          backgroundColor: Colors.grey[800],
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                            Colors.blue,
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 16),
                       Text(
-                        '$_downloadProgress%',
-                        style: const TextStyle(fontSize: 14),
+                        '${_downloadProgress.toStringAsFixed(0)}%',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_downloadProgress == 100)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        width: double.infinity,
+                        child: LinearProgressIndicator(
+                          value: 1.0,
+                          minHeight: 10,
+                          backgroundColor: Colors.grey[800],
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                            Colors.green,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Finalizing...',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.green,
+                        ),
                       ),
                     ],
                   ),
