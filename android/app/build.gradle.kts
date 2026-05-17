@@ -37,8 +37,8 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             
             // R8 minification settings for flutter_gemma compatibility
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"  // Custom rules for flutter_gemma & MediaPipe
