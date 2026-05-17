@@ -40,8 +40,9 @@ class GemmaService {
   /// Download model from HuggingFace if not already present
   Future<String?> _downloadModelIfNeeded() async {
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final modelPath = '${appDir.path}/$modelFileName';
+      // Use app cache directory - flutter_gemma expects models here
+      final cacheDir = await getApplicationCacheDirectory();
+      final modelPath = '${cacheDir.path}/$modelFileName';
       final modelFile = File(modelPath);
 
       // If model already exists locally, use it
@@ -146,28 +147,19 @@ class GemmaService {
       _updateProgress(70, 'Setting up model...');
       debugPrint('⚙️ Creating model instance...');
 
-      // Create model - flutter_gemma plugin will use the downloaded model
       try {
+        debugPrint('📍 Loading LiteRT-LM model from: $modelPath');
+
+        // For LiteRT models, create model with modelType and let the platform
+        // detect the .litertlm extension to route to LiteRtLmFfiClient
         _model = await _gemma.createModel(
           modelType: ModelType.gemmaIt,
           maxTokens: 2048,
         );
+        debugPrint('✅ Model initialized successfully');
       } catch (e) {
-        // If createModel fails, try alternative initialization
-        debugPrint('⚠️ Primary initialization failed: $e');
-        debugPrint('🔄 Retrying with alternative method...');
-        
-        // Try to set the model path explicitly
-        try {
-          await _gemma.modelManager.setModelPath(modelPath);
-          _model = await _gemma.createModel(
-            modelType: ModelType.gemmaIt,
-            maxTokens: 2048,
-          );
-        } catch (e2) {
-          throw Exception('Failed to initialize model: $e2');
-        }
-      }
+        debugPrint('❌ Model initialization failed: $e');
+        throw Exception('Failed to initialize model: $e');    }
 
       _updateProgress(85, 'Creating chat session...');
       debugPrint('💬 Setting up chat...');
@@ -183,14 +175,14 @@ class GemmaService {
       _updateProgress(100, 'Ready!');
       _initialised = true;
       _initError = null;
-      
+
       debugPrint('✅ GemmaService initialized successfully!');
       debugPrint('🎉 Model is ready for chat');
     } catch (e) {
       _initError = e.toString();
       _initialised = false;
       _updateProgress(0, 'Initialization failed');
-      
+
       debugPrint('❌ Initialization error: $e');
 
       // Provide helpful diagnostics
