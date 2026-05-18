@@ -42,7 +42,7 @@ class _FFIChatWrapper {
     });
   }
 
-  /// Stream responses token by token
+  /// Stream responses token by token with smooth delay
   Stream<dynamic> generateChatResponseAsync() async* {
     if (_history.isEmpty) {
       throw Exception('No messages in conversation');
@@ -66,6 +66,10 @@ class _FFIChatWrapper {
       if (textToken.isNotEmpty) {
         assistantResponse += textToken;
         yield TextResponse(token: textToken);
+        
+        // Add smooth delay for natural typing effect
+        // This doesn't slow down the model, just the UI rendering
+        await Future.delayed(const Duration(milliseconds: 25));
       }
     }
     

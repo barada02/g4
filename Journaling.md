@@ -196,6 +196,78 @@ if (_scrollController.positions.isNotEmpty) {
 
 ---
 
+## Problem 6: LiteRT-LM Model Format Mismatch (v0.15.3 Upgrade)
+
+### Issue
+Upgraded to newer gemma-4-E2B-it model in `.litertlm` format (LiteRT-LM optimized). App crashed:
+```
+IllegalArgumentException: /data/user/0/com.example.g4/cache/gemma-4-E2B-it.litertlm 
+is a LiteRT-LM model — it should be handled by Dart FFI (LiteRtLmFfiClient), 
+not by EngineFactory.
+```
+
+### Root Cause
+Old platform channel API (`createModel()` via JNI/EngineFactory) only supports `.task` format. New `.litertlm` format requires **Dart FFI backend** for native token-level streaming.
+
+### Solution: Backend Migration
+Migrated from **platform channel** → **Dart FFI**:
+
+| Layer | Old (`.task`) | New (`.litertlm`) |
+|-------|---|---|
+| Dart → Native | Platform Channel (JNI) | Dart FFI (direct C bindings) |
+| API | `FlutterGemmaPlugin.createModel()` | `LiteRtLmFfiClient.initialize()` |
+| Response | Platform streaming | Native callbacks |
+
+**Implementation**:
+```dart
+// Detect model format and route appropriately
+if (modelPath.endsWith('.litertlm')) {
+  _ffiClient = LiteRtLmFfiClient();
+  await _ffiClient.initialize(modelPath: modelPath, backend: 'gpu');
+  _ffiChat = _FFIChatWrapper(_ffiClient);  // Wrapper for compatibility
+} else {
+  // Use old platform channel for .task models
+  await _gemma.modelManager.setModelPath(modelPath);
+}
+```
+
+**Result**: Model loads via FFI, avoids EngineFactory error ✅
+
+---
+
+## Problem 7: Non-Streaming Response Display (FFI Integration)
+
+### Issue
+After FFI migration, responses appeared **instantly all at once** instead of token-by-token streaming.
+
+### Root Cause
+Was using `_client.chat()` which wraps `sendMessageStreamRaw()` but may buffer intermediate chunks. The native token stream wasn't being consumed properly.
+
+### Solution: Use Low-Level Streaming API
+Switch to `sendMessageStreamRaw()` (lowest-level native callback API) + proper JSON parsing:
+
+```dart
+// Use sendMessageStreamRaw for true token-by-token from native engine
+final messageJson = LiteRtLmFfiClient.buildMessageJson(lastMessage['content']);
+
+await for (final jsonChunk in _client.sendMessageStreamRaw(messageJson)) {
+  final textToken = LiteRtLmFfiClient.extractTextFromResponse(jsonChunk);
+  if (textToken.isNotEmpty) {
+    yield TextResponse(token: textToken);
+    await Future.delayed(const Duration(milliseconds: 25)); // Smooth UI
+  }
+}
+```
+
+**Key insight**: 
+- `sendMessageStreamRaw()` = native callbacks (true streaming)
+- `chat()` = wrapper around above (may batch chunks)
+- `sendMessage()` = blocks until full response (buffered)
+
+**Result**: Real token-by-token streaming from LiteRT-LM engine ✅
+
+---
+
 ## Lessons Learned
 
 1. **Always verify API contracts** - Don't assume method names; check actual package documentation
@@ -203,16 +275,20 @@ if (_scrollController.positions.isNotEmpty) {
 3. **Explicit initialization** - Platform plugins often need explicit setup calls
 4. **Orchestration matters** - Proper sequencing of async operations is critical
 5. **UI safety checks** - Always verify UI state before calling animation methods
+6. **Model format matters** - `.task` vs `.litertlm` require different backends (platform vs FFI)
+7. **Use lowest-level API for streaming** - `sendMessageStreamRaw()` provides true native callbacks, not wrapped APIs
 
 ---
 
 ## Current Status ✅
 
+- ✅ Model: Gemma 4 E2B (LiteRT-LM format, `.litertlm`)
+- ✅ Backend: Dart FFI (native C bindings) - not platform channel
 - ✅ Model downloads without OOM (2.4GB handled successfully)
-- ✅ FlutterGemma plugin properly initialized
-- ✅ Model loads and initializes correctly
-- ✅ Chat messages send successfully
-- ✅ Responses stream token-by-token to UI
+- ✅ FFI initialization with GPU backend (CPU fallback)
+- ✅ Real token-by-token streaming via `sendMessageStreamRaw()` native callbacks
+- ✅ Smooth UI rendering with 25ms token delay (doesn't affect model performance)
+- ✅ Chat messages stream successfully to UI
 - ✅ No crashes during operation
 
-**App is fully functional for on-device Gemma 4 chat!** 🎉
+**Next**: Real-world testing and performance profiling
