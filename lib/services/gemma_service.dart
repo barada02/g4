@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'dart:async';
 
 // Direct model URL (no authentication needed)
 const String modelUrl = 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
@@ -69,7 +70,7 @@ class _FFIChatWrapper {
         
         // Add smooth delay for natural typing effect
         // This doesn't slow down the model, just the UI rendering
-        await Future.delayed(const Duration(milliseconds: 25));
+        await Future.delayed(const Duration(milliseconds: 55));
       }
     }
     
@@ -141,6 +142,8 @@ class GemmaService {
   bool _isDownloading = false;
   int _downloadProgress = 0; // 0-100
   String _downloadStatus = '';
+  String _selectedBackend = 'gpu';  // Track selected backend
+  int _conversationTurns = 0;  // Track conversation turns for KV cache management
 
   bool get isInitialised => _initialised;
   String? get initError => _initError;
@@ -148,6 +151,54 @@ class GemmaService {
   bool get isDownloading => _isDownloading;
   int get downloadProgress => _downloadProgress;
   String get downloadStatus => _downloadStatus;
+  String get selectedBackend => _selectedBackend;
+
+  /// Auto-detect best backend (GPU if available, fall back to CPU)
+  Future<String> _detectOptimalBackend() async {
+    debugPrint('🔍 Detecting optimal backend (GPU/CPU)...');
+    
+    try {
+      // Try GPU first on Android (Qualcomm Adreno, ARM Mali)
+      if (Platform.isAndroid) {
+        // GPU is typically available on modern Android devices
+        debugPrint('✅ Android detected - attempting GPU backend');
+        return 'gpu';
+      } else if (Platform.isIOS) {
+        // iOS Metal support
+        debugPrint('✅ iOS detected - attempting GPU backend (Metal)');
+        return 'gpu';
+      } else {
+        // Linux/Windows desktop
+        debugPrint('⚠️ Desktop platform - using CPU backend');
+        return 'cpu';
+      }
+    } catch (e) {
+      debugPrint('❌ Backend detection failed: $e - falling back to CPU');
+      return 'cpu';
+    }
+  }
+
+  /// Manage KV cache to prevent slowdown in long conversations
+  Future<void> _manageKVCache() async {
+    _conversationTurns++;
+    
+    // Clear cache every 20 turns to prevent OOM and maintain speed
+    const maxTurnsBeforeClear = 20;
+    
+    if (_conversationTurns >= maxTurnsBeforeClear) {
+      debugPrint('🧹 KV cache threshold reached ($_conversationTurns/$maxTurnsBeforeClear turns)');
+      debugPrint('🔄 Clearing conversation history to manage KV cache...');
+      
+      try {
+        // Clear old messages, keep system context
+        await _chat?.clear();
+        _conversationTurns = 0;
+        debugPrint('✅ KV cache cleared, conversation reset');
+      } catch (e) {
+        debugPrint('⚠️ Cache clear failed: $e');
+      }
+    }
+  }
 
   /// Update download progress for UI
   void _updateProgress(int progress, String status) {
@@ -281,16 +332,20 @@ class GemmaService {
           // Initialize FFI client for LiteRT-LM models
           _ffiClient = LiteRtLmFfiClient();
           
+          // Auto-detect optimal backend
+          _selectedBackend = await _detectOptimalBackend();
+          
           try {
             debugPrint('📍 Initializing FFI client with model: $modelPath');
+            debugPrint('🖥️ Backend: $_selectedBackend');
             await _ffiClient!.initialize(
               modelPath: modelPath,
-              backend: 'gpu', // Use GPU if available, falls back to CPU
+              backend: _selectedBackend,  // Use auto-detected backend
               maxTokens: 2048,
               enableVision: false,
               enableAudio: false,
             );
-            debugPrint('✅ FFI client initialized successfully');
+            debugPrint('✅ FFI client initialized successfully with $_selectedBackend backend');
 
             // Create FFI chat wrapper
             _ffiChat = _FFIChatWrapper(_ffiClient!);
@@ -299,13 +354,14 @@ class GemmaService {
             _chat = _ffiChat;
           } catch (e) {
             debugPrint('❌ FFI initialization failed: $e');
-            // If FFI fails, try with 'cpu' backend explicitly
-            if (e.toString().contains('GPU')) {
-              debugPrint('🔄 Retrying with CPU backend...');
+            // If GPU fails, try with CPU backend explicitly
+            if (e.toString().contains('GPU') || _selectedBackend == 'gpu') {
+              debugPrint('🔄 GPU failed - retrying with CPU backend...');
+              _selectedBackend = 'cpu';
               _ffiClient = LiteRtLmFfiClient();
               await _ffiClient!.initialize(
                 modelPath: modelPath,
-                backend: 'cpu', // Fall back to CPU
+                backend: 'cpu',  // Fall back to CPU
                 maxTokens: 2048,
                 enableVision: false,
                 enableAudio: false,
@@ -411,6 +467,9 @@ class GemmaService {
     }
 
     try {
+      // Manage KV cache before each message
+      await _manageKVCache();
+      
       final startTime = DateTime.now();
       DateTime? firstTokenTime;
       int tokenCount = 0;

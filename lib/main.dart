@@ -47,6 +47,7 @@ class _ChatPageState extends State<ChatPage> {
   String _status = 'Initializing Gemma...';
   String _responseBuffer = '';
   int _downloadProgress = 0;
+  String? _selectedBackend;  // Track selected GPU/CPU backend
 
   @override
   void initState() {
@@ -130,10 +131,9 @@ class _ChatPageState extends State<ChatPage> {
   void _scrollToBottom() {
     Future.microtask(() {
       if (_scrollController.positions.isNotEmpty) {
-        _scrollController.animateTo(
+        // Jump immediately to bottom during streaming (no animation)
+        _scrollController.jumpTo(
           _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
         );
       }
     });
@@ -172,7 +172,7 @@ class _ChatPageState extends State<ChatPage> {
           setState(() {
             _responseBuffer += token;
           });
-          _scrollToBottom();
+          _scrollToBottom();  // Scroll on every token for smooth following
         },
         onComplete: (stats) {
           // Add assistant message with complete response
@@ -325,6 +325,7 @@ class _ChatPageState extends State<ChatPage> {
                     controller: _scrollController,
                     padding: const EdgeInsets.all(16),
                     itemCount: _messages.length,
+                    reverse: false,  // Messages flow bottom-up naturally
                     itemBuilder: (context, index) {
                       final msg = _messages[index];
                       final isLastMessage = index == _messages.length - 1;
