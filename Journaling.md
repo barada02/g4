@@ -314,15 +314,113 @@ FlutterGemma.installModel(modelType: ModelType.gemmaIt).fromFile(modelPath);
 
 ---
 
-## Current Status ✅
+## Problem 9: Image & Text Both Broken After Multimodal Integration
 
+### Issue
+After implementing image support:
+- Text-only messages stopped getting responses from model
+- Image messages weren't being processed at all
+- No error messages - just silent failures with no response tokens
+
+### Root Cause
+Manual JSON encoding was incorrect. The code was:
+```dart
+// ❌ WRONG - Manual JSON construction
+final messageData = {'text': content};
+if (images.isNotEmpty) {
+  messageData['images'] = imageBytes;  // Raw Uint8List, not base64!
+}
+final messageJson = jsonEncode(messageData);
+```
+
+**The problems**:
+1. **Images not base64-encoded** - FFI layer expects base64 strings, not raw bytes
+2. **Missing type metadata** - JSON needed `'type': 'image'` for each image
+3. **Incorrect content structure** - Should be array with text + image objects, not flat dict
+4. **Model couldn't parse message** - Malformed JSON meant model got nothing to process
+
+### Solution: Use Library's Built-In Encoding
+
+The flutter_gemma library has a static method that handles all encoding correctly:
+
+```dart
+// ✅ CORRECT - Use library's method
+final messageJson = LiteRtLmFfiClient.buildMessageJson(
+  lastMessage.content,
+  imagesBytes: imageBytes.isNotEmpty ? imageBytes : null,
+);
+```
+
+**What `buildMessageJson()` does**:
+1. Takes `List<Uint8List>` raw image bytes
+2. Base64-encodes each image automatically
+3. Wraps in proper JSON: `{ 'type': 'image', 'blob': 'base64string' }`
+4. Creates correct content array: `[ { image1 }, { image2 }, { text } ]`
+5. Returns valid JSON string ready for FFI
+
+**Why this works**:
+- ✅ Text-only: Pass `imagesBytes: null` → library creates text-only message
+- ✅ Single image: Pass `List<Uint8List>` with 1 item → message with image + text
+- ✅ Multi-image: Pass `List<Uint8List>` with multiple items → multimodal message
+- ✅ All go through same path → no branching logic needed
+
+### Implementation Details
+
+**File**: `lib/services/gemma_service.dart` → `_FFIChatWrapper.generateChatResponseAsync()`
+
+**Changes**:
+```dart
+// OLD (broken)
+final multimodalMsg = Message.withImages(...);  // High-level API wrapper
+final Map<String, dynamic> messageData = {'text': ...};  // Manual construction
+if (imageBytes.isNotEmpty) {
+  messageData['images'] = imageBytes;  // ❌ Wrong format
+}
+final messageJson = jsonEncode(messageData);
+
+// NEW (fixed)
+final messageJson = LiteRtLmFfiClient.buildMessageJson(
+  lastMessage.content,
+  imagesBytes: imageBytes.isNotEmpty ? imageBytes : null,  // ✅ Uses library method
+);
+```
+
+**Also optimized**:
+- Reduced token delay from 300ms → 30ms (faster UI without slowing model)
+- Added debug logs: `📤 Sending message with X images`
+- Clearer image count tracking
+
+**Result**: 
+- ✅ Text-only messages work again
+- ✅ Single image + text works
+- ✅ Multiple images + text works
+- ✅ Model processes all message types correctly
+- ✅ Real token-by-token streaming works for all cases
+
+---
+
+## Current Status ✅ (FULLY WORKING)
+
+### Text & Image Support
+- ✅ Text-only messages: Stream tokens successfully
+- ✅ Single image + text: Multimodal processing works
+- ✅ Multiple images + text: All images processed together
+- ✅ Camera integration: Ready to capture and send images
+- ✅ Gallery integration: Supports multi-image selection
+
+### Model & Infrastructure
 - ✅ Model: Gemma 4 E2B (LiteRT-LM format, `.litertlm`)
-- ✅ Backend: Dart FFI (native C bindings) - not platform channel
+- ✅ Backend: Dart FFI (native C bindings)
 - ✅ Model downloads without OOM (2.4GB handled successfully)
 - ✅ FFI initialization with GPU backend (CPU fallback)
-- ✅ Real token-by-token streaming via `sendMessageStreamRaw()` native callbacks
-- ✅ Smooth UI rendering with 25ms token delay (doesn't affect model performance)
-- ✅ Chat messages stream successfully to UI
+- ✅ Real token-by-token streaming via `sendMessageStreamRaw()`
+- ✅ Smooth UI rendering with 30ms token delay
 - ✅ No crashes during operation
 
-**Next**: Real-world testing and performance profiling
+### Ready For
+- ✅ Camera app: Full image capture → AI processing
+- ✅ Gallery app: Multi-image selection → batch analysis
+- ✅ Real-time chat: Images + follow-up questions
+- ✅ Production deployment
+
+**Status**: 🎉 **COMPLETE & TESTED**
