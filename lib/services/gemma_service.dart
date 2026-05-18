@@ -1,12 +1,107 @@
 import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:flutter_gemma/core/ffi/litert_lm_client.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 // Direct model URL (no authentication needed)
 const String modelUrl = 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
 const String modelFileName = 'gemma-4-E2B-it.litertlm';
+
+/// Wrapper for FFI-based chat interface (compatible with platform API)
+class _FFIChatWrapper {
+  final LiteRtLmFfiClient _client;
+  bool _conversationCreated = false;
+  final List<Map<String, dynamic>> _history = [];
+
+  _FFIChatWrapper(this._client);
+
+  /// Create a conversation session
+  void createConversation() {
+    if (!_conversationCreated) {
+      _client.createConversation(
+        systemMessage: 'You are a helpful AI assistant.',
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+      );
+      _conversationCreated = true;
+    }
+  }
+
+  /// Add a message to the conversation
+  Future<void> addQuery(Message message) async {
+    if (!_conversationCreated) {
+      createConversation();
+    }
+    _history.add({
+      'role': message.isUser ? 'user' : 'assistant',
+      'content': message.content,
+    });
+  }
+
+  /// Stream responses token by token
+  Stream<dynamic> generateChatResponseAsync() async* {
+    if (_history.isEmpty) {
+      throw Exception('No messages in conversation');
+    }
+
+    final lastMessage = _history.last;
+    if (lastMessage['role'] != 'user') {
+      throw Exception('Last message must be from user');
+    }
+
+    // Stream response from FFI client
+    await for (final token in _client.chatRaw(lastMessage['content'])) {
+      yield TextResponse(token: token);
+    }
+  }
+
+  /// Clear conversation history
+  Future<void> clear() async {
+    _history.clear();
+    _conversationCreated = false;
+    _client.createConversation(); // Reset for next conversation
+  }
+
+  /// Get conversation history
+  Future<List<ChatMessage>> getHistory() async {
+    return _history
+        .map((msg) => ChatMessage(
+              isUser: msg['role'] == 'user',
+              content: msg['content'],
+            ))
+        .toList();
+  }
+}
+
+/// Chat message model for history
+class ChatMessage {
+  final bool isUser;
+  final String content;
+
+  ChatMessage({required this.isUser, required this.content});
+}
+
+/// Text response model (compatible with platform API)
+class TextResponse {
+  final String token;
+  TextResponse({required this.token});
+}
+
+/// Message model (compatible with platform API)
+class Message {
+  final String content;
+  final bool isUser;
+
+  Message({required this.content, required this.isUser});
+
+  factory Message.text({required String text, required bool isUser}) {
+    return Message(content: text, isUser: isUser);
+  }
+}
 
 /// Core AI model service using Gemma with streaming support
 class GemmaService {
@@ -14,8 +109,11 @@ class GemmaService {
   static final GemmaService instance = GemmaService._internal();
 
   final _gemma = FlutterGemmaPlugin.instance;
+  LiteRtLmFfiClient? _ffiClient;
+  _FFIChatWrapper? _ffiChat;
   dynamic _model;
   dynamic _chat;
+  bool _usesFFI = false;
   bool _initialised = false;
   bool _initializationAttempted = false;
   String? _initError;
@@ -143,34 +241,101 @@ class GemmaService {
         throw Exception('Download still in progress - initialization delayed');
       }
 
-      // PHASE 2: Initialize model only AFTER download is 100% complete
+      // PHASE 2: Register and initialize model
+      _updateProgress(60, 'Registering model...');
+      debugPrint('📋 Setting model as active: $modelPath');
+
+      // PHASE 3: Initialize model
       _updateProgress(70, 'Setting up model...');
       debugPrint('⚙️ Creating model instance...');
 
       try {
-        debugPrint('📍 Loading LiteRT-LM model from: $modelPath');
+        debugPrint('📍 Creating inference model');
 
-        // For LiteRT models, create model with modelType and let the platform
-        // detect the .litertlm extension to route to LiteRtLmFfiClient
-        _model = await _gemma.createModel(
-          modelType: ModelType.gemmaIt,
-          maxTokens: 2048,
-        );
-        debugPrint('✅ Model initialized successfully');
+        // Check if model is LiteRT-LM format (.litertlm)
+        if (modelPath.endsWith('.litertlm')) {
+          debugPrint('🔧 Detected LiteRT-LM model - using Dart FFI backend');
+          _usesFFI = true;
+
+          // Initialize FFI client for LiteRT-LM models
+          _ffiClient = LiteRtLmFfiClient();
+          
+          try {
+            debugPrint('📍 Initializing FFI client with model: $modelPath');
+            await _ffiClient!.initialize(
+              modelPath: modelPath,
+              backend: 'gpu', // Use GPU if available, falls back to CPU
+              maxTokens: 2048,
+              enableVision: false,
+              enableAudio: false,
+            );
+            debugPrint('✅ FFI client initialized successfully');
+
+            // Create FFI chat wrapper
+            _ffiChat = _FFIChatWrapper(_ffiClient!);
+            _ffiChat!.createConversation();
+            _model = _ffiClient;
+            _chat = _ffiChat;
+          } catch (e) {
+            debugPrint('❌ FFI initialization failed: $e');
+            // If FFI fails, try with 'cpu' backend explicitly
+            if (e.toString().contains('GPU')) {
+              debugPrint('🔄 Retrying with CPU backend...');
+              _ffiClient = LiteRtLmFfiClient();
+              await _ffiClient!.initialize(
+                modelPath: modelPath,
+                backend: 'cpu', // Fall back to CPU
+                maxTokens: 2048,
+                enableVision: false,
+                enableAudio: false,
+              );
+              _ffiChat = _FFIChatWrapper(_ffiClient!);
+              _ffiChat!.createConversation();
+              _model = _ffiClient;
+              _chat = _ffiChat;
+              debugPrint('✅ FFI client initialized successfully with CPU backend');
+            } else {
+              throw Exception('Failed to initialize FFI client: $e');
+            }
+          }
+        } else {
+          // For non-LiteRT-LM models, use the platform channel API
+          debugPrint('🔧 Using platform channel backend for regular model');
+          _usesFFI = false;
+
+          // Register the downloaded model as the active model via platform channel
+          try {
+            await _gemma.modelManager.setModelPath(modelPath);
+            debugPrint('✅ Model registered and set as active');
+          } catch (e) {
+            debugPrint('❌ Failed to set active model: $e');
+            throw Exception('Failed to register model: $e');
+          }
+
+          // Create model with platform API
+          _model = await _gemma.createModel(
+            modelType: ModelType.gemmaIt,
+            maxTokens: 2048,
+          );
+          debugPrint('✅ Model initialized successfully');
+        }
       } catch (e) {
         debugPrint('❌ Model initialization failed: $e');
-        throw Exception('Failed to initialize model: $e');    }
+        throw Exception('Failed to initialize model: $e');
+      }
 
       _updateProgress(85, 'Creating chat session...');
       debugPrint('💬 Setting up chat...');
 
-      // Create chat session
-      _chat = await _model.createChat(
-        randomSeed: 42,
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-      );
+      // Chat session already created in FFI wrapper or by platform API
+      if (!_usesFFI) {
+        _chat = await _model.createChat(
+          randomSeed: 42,
+          temperature: 0.7,
+          topK: 40,
+          topP: 0.95,
+        );
+      }
 
       _updateProgress(100, 'Ready!');
       _initialised = true;
@@ -186,13 +351,32 @@ class GemmaService {
       debugPrint('❌ Initialization error: $e');
 
       // Provide helpful diagnostics
-      if (e.toString().contains('No active inference model')) {
+      if (e.toString().contains('LiteRT-LM model')) {
+        debugPrint('💡 FFI backend for LiteRT-LM models may not be available on this platform');
+      } else if (e.toString().contains('No active inference model')) {
         debugPrint('💡 The model needs to be properly registered with flutter_gemma');
       } else if (e.toString().contains('Out of memory')) {
         debugPrint('⚠️ Device ran out of memory during model loading');
         debugPrint('💡 Try freeing up memory and restarting the app');
       }
     }
+  }
+
+  /// Cleanup resources
+  Future<void> dispose() async {
+    if (_usesFFI && _ffiClient != null) {
+      try {
+        _ffiClient!.shutdown();
+        debugPrint('✅ FFI client shutdown successfully');
+      } catch (e) {
+        debugPrint('❌ Error shutting down FFI client: $e');
+      }
+    }
+    _chat = null;
+    _model = null;
+    _ffiClient = null;
+    _ffiChat = null;
+    _initialised = false;
   }
 
   /// Send message and stream response token by token
@@ -251,14 +435,6 @@ class GemmaService {
       await _chat.clear();
     }
     debugPrint('🗑️ Chat cleared');
-  }
-
-  /// Cleanup resources
-  Future<void> dispose() async {
-    _chat = null;
-    _model = null;
-    _initialised = false;
-    debugPrint('🛑 GemmaService disposed');
   }
 }
 
