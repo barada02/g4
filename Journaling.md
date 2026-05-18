@@ -268,7 +268,41 @@ await for (final jsonChunk in _client.sendMessageStreamRaw(messageJson)) {
 
 ---
 
+## Problem 8: Deprecated flutter_gemma API
+
+### Issue
+Code used deprecated `setModelPath()` method which triggered lint warning:
+```
+(deprecated) Future<void> setModelPath(String path, {String? loraPath})
+Use FlutterGemma.installModel().fromFile() instead.
+```
+
+### Root Cause
+flutter_gemma updated its API. The old `modelManager.setModelPath()` is deprecated in favor of a new builder pattern using `FlutterGemma.installModel()`.
+
+### Solution: Use New Builder API
+Migrated from deprecated platform channel model registration to new API:
+
+```dart
+// ❌ OLD (deprecated)
+await _gemma.modelManager.setModelPath(modelPath);
+
+// ✅ NEW (current API)
+FlutterGemma.installModel(modelType: ModelType.gemmaIt).fromFile(modelPath);
+```
+
+**Key Points**:
+- Use `FlutterGemma` class directly, not the plugin instance (`_gemma`)
+- Provide required `modelType: ModelType.gemmaIt` parameter
+- `fromFile()` returns `InferenceInstallationBuilder` (not a Future) - no `await` needed
+- Method automatically sets the model as active
+
+**Result**: No deprecation warnings, code uses current flutter_gemma API ✅
+
+---
+
 ## Lessons Learned
+
 
 1. **Always verify API contracts** - Don't assume method names; check actual package documentation
 2. **Stream large files** - Never buffer large downloads in memory
