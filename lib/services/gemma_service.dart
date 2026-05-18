@@ -70,7 +70,7 @@ class _FFIChatWrapper {
         
         // Add smooth delay for natural typing effect
         // This doesn't slow down the model, just the UI rendering
-        await Future.delayed(const Duration(milliseconds: 55));
+        await Future.delayed(const Duration(milliseconds: 300));
       }
     }
     
@@ -158,20 +158,27 @@ class GemmaService {
     debugPrint('🔍 Detecting optimal backend (GPU/CPU)...');
     
     try {
+      // ========== ORIGINAL GPU LOGIC (COMMENTED FOR CPU TESTING) ==========
       // Try GPU first on Android (Qualcomm Adreno, ARM Mali)
-      if (Platform.isAndroid) {
-        // GPU is typically available on modern Android devices
-        debugPrint('✅ Android detected - attempting GPU backend');
-        return 'gpu';
-      } else if (Platform.isIOS) {
-        // iOS Metal support
-        debugPrint('✅ iOS detected - attempting GPU backend (Metal)');
-        return 'gpu';
-      } else {
-        // Linux/Windows desktop
-        debugPrint('⚠️ Desktop platform - using CPU backend');
-        return 'cpu';
-      }
+      // if (Platform.isAndroid) {
+      //   // GPU is typically available on modern Android devices
+      //   debugPrint('✅ Android detected - attempting GPU backend');
+      //   return 'gpu';
+      // } else if (Platform.isIOS) {
+      //   // iOS Metal support
+      //   debugPrint('✅ iOS detected - attempting GPU backend (Metal)');
+      //   return 'gpu';
+      // } else {
+      //   // Linux/Windows desktop
+      //   debugPrint('⚠️ Desktop platform - using CPU backend');
+      //   return 'cpu';
+      // }
+      // ======================================================================
+      
+      // 🧪 TESTING: Force CPU for performance comparison
+      debugPrint('🧪 CPU TESTING MODE - forcing CPU backend for benchmarking');
+      return 'cpu';
+      
     } catch (e) {
       debugPrint('❌ Backend detection failed: $e - falling back to CPU');
       return 'cpu';
