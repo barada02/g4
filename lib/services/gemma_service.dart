@@ -53,8 +53,9 @@ class _FFIChatWrapper {
       throw Exception('Last message must be from user');
     }
 
-    // Stream response from FFI client
-    await for (final token in _client.chatRaw(lastMessage['content'])) {
+    // Stream response from FFI client using chat() for plain text tokens
+    // (not chatRaw() which returns JSON chunks)
+    await for (final token in _client.chat(lastMessage['content'])) {
       yield TextResponse(token: token);
     }
   }
