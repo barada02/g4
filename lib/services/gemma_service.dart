@@ -3,9 +3,9 @@ import 'package:flutter_gemma/core/ffi/litert_lm_client.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'dart:async';
+import '../models/chat_models.dart' as app_models;
 
 // Direct model URL (no authentication needed)
 const String modelUrl = 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
@@ -33,7 +33,7 @@ class _FFIChatWrapper {
   }
 
   /// Add a message to the conversation
-  Future<void> addQuery(Message message) async {
+  Future<void> addQuery(app_models.AppMessage message) async {
     if (!_conversationCreated) {
       createConversation();
     }
@@ -66,7 +66,7 @@ class _FFIChatWrapper {
       final textToken = LiteRtLmFfiClient.extractTextFromResponse(jsonChunk);
       if (textToken.isNotEmpty) {
         assistantResponse += textToken;
-        yield TextResponse(token: textToken);
+        yield app_models.AppTextResponse(token: textToken);
         
         // Add smooth delay for natural typing effect
         // This doesn't slow down the model, just the UI rendering
@@ -89,39 +89,13 @@ class _FFIChatWrapper {
   }
 
   /// Get conversation history
-  Future<List<ChatMessage>> getHistory() async {
+  Future<List<app_models.ChatMessage>> getHistory() async {
     return _history
-        .map((msg) => ChatMessage(
+        .map((msg) => app_models.ChatMessage(
               isUser: msg['role'] == 'user',
               content: msg['content'],
             ))
         .toList();
-  }
-}
-
-/// Chat message model for history
-class ChatMessage {
-  final bool isUser;
-  final String content;
-
-  ChatMessage({required this.isUser, required this.content});
-}
-
-/// Text response model (compatible with platform API)
-class TextResponse {
-  final String token;
-  TextResponse({required this.token});
-}
-
-/// Message model (compatible with platform API)
-class Message {
-  final String content;
-  final bool isUser;
-
-  Message({required this.content, required this.isUser});
-
-  factory Message.text({required String text, required bool isUser}) {
-    return Message(content: text, isUser: isUser);
   }
 }
 
@@ -468,7 +442,7 @@ class GemmaService {
   Future<void> sendWithStreaming({
     required String text,
     required Function(String) onToken,
-    required Function(MessageStats) onComplete,
+    required Function(app_models.MessageStats) onComplete,
   }) async {
     if (!_initialised || _chat == null) {
       throw Exception('GemmaService not initialized. Error: $_initError');
@@ -486,14 +460,14 @@ class GemmaService {
       debugPrint('🚀 Sending: $text');
 
       // Add user message to chat
-      await _chat.addQuery(Message.text(text: text, isUser: true));
+      await _chat.addQuery(app_models.AppMessage.text(text: text, isUser: true));
       
       // Stream responses token by token using generateChatResponseAsync
       final responseStream = _chat.generateChatResponseAsync();
       
       await for (final response in responseStream) {
         // Handle text responses (tokens)
-        if (response is TextResponse) {
+        if (response is app_models.AppTextResponse) {
           firstTokenTime ??= DateTime.now();
           tokenCount++;
           final token = response.token;
@@ -505,7 +479,7 @@ class GemmaService {
       final fullResponse = buffer.toString();
       debugPrint('✅ Response complete: ${fullResponse.length} characters, $tokenCount tokens');
 
-      final stats = MessageStats(
+      final stats = app_models.MessageStats(
         totalTokens: tokenCount,
         timeToFirstToken: firstTokenTime?.difference(startTime).inMilliseconds,
         totalTime: DateTime.now().difference(startTime).inMilliseconds,
@@ -523,23 +497,5 @@ class GemmaService {
       await _chat.clear();
     }
     debugPrint('🗑️ Chat cleared');
-  }
-}
-
-/// Statistics from streaming response
-class MessageStats {
-  final int totalTokens;
-  final int? timeToFirstToken; // ms to first token
-  final int totalTime; // Total response time
-
-  MessageStats({
-    required this.totalTokens,
-    this.timeToFirstToken,
-    required this.totalTime,
-  });
-
-  String get formattedStats {
-    final ttft = timeToFirstToken ?? 0;
-    return 'Tokens: $totalTokens | TTFT: ${ttft}ms | Total: ${totalTime}ms';
   }
 }
