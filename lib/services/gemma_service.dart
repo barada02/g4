@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'dart:async';
+import 'dart:convert';
 import '../models/chat_models.dart' as app_models;
 
 // Direct model URL (no authentication needed)
@@ -15,7 +16,7 @@ const String modelFileName = 'gemma-4-E2B-it.litertlm';
 class _FFIChatWrapper {
   final LiteRtLmFfiClient _client;
   bool _conversationCreated = false;
-  final List<Map<String, dynamic>> _history = [];
+  final List<app_models.AppMessage> _history = [];
 
   _FFIChatWrapper(this._client);
 
@@ -37,10 +38,7 @@ class _FFIChatWrapper {
     if (!_conversationCreated) {
       createConversation();
     }
-    _history.add({
-      'role': message.isUser ? 'user' : 'assistant',
-      'content': message.content,
-    });
+    _history.add(message);
   }
 
   /// Stream responses token by token with smooth delay
@@ -50,13 +48,21 @@ class _FFIChatWrapper {
     }
 
     final lastMessage = _history.last;
-    if (lastMessage['role'] != 'user') {
+    if (!lastMessage.isUser) {
       throw Exception('Last message must be from user');
     }
 
-    // Use sendMessageStreamRaw for true token-by-token streaming from native callbacks
-    // This is the lowest-level streaming API that receives tokens directly from LiteRT-LM engine
-    final messageJson = LiteRtLmFfiClient.buildMessageJson(lastMessage['content']);
+    // Ensure we have a non-null list for images
+    final List<Uint8List> imageBytes = lastMessage.images ?? [];
+
+    // Use the library's built-in method to properly encode message with base64 images
+    // This handles: text content + base64-encoded images + proper JSON structure
+    final messageJson = LiteRtLmFfiClient.buildMessageJson(
+      lastMessage.content,
+      imagesBytes: imageBytes.isNotEmpty ? imageBytes : null,
+    );
+
+    debugPrint('📤 Sending message with ${imageBytes.length} images');
     
     String assistantResponse = '';
     
@@ -70,15 +76,17 @@ class _FFIChatWrapper {
         
         // Add smooth delay for natural typing effect
         // This doesn't slow down the model, just the UI rendering
-        await Future.delayed(const Duration(milliseconds: 300));
+        await Future.delayed(const Duration(milliseconds: 30));
       }
     }
     
+    debugPrint('✅ Assistant response received: ${assistantResponse.length} chars, ${assistantResponse.split(' ').length} tokens');
+    
     // Add assistant response to history after streaming completes
-    _history.add({
-      'role': 'assistant',
-      'content': assistantResponse,
-    });
+    _history.add(app_models.AppMessage.text(
+      text: assistantResponse,
+      isUser: false,
+    ));
   }
 
   /// Clear conversation history
@@ -92,8 +100,9 @@ class _FFIChatWrapper {
   Future<List<app_models.ChatMessage>> getHistory() async {
     return _history
         .map((msg) => app_models.ChatMessage(
-              isUser: msg['role'] == 'user',
-              content: msg['content'],
+              isUser: msg.isUser,
+              content: msg.content,
+              images: msg.images,
             ))
         .toList();
   }
@@ -323,7 +332,7 @@ class GemmaService {
               modelPath: modelPath,
               backend: _selectedBackend,  // Use auto-detected backend
               maxTokens: 2048,
-              enableVision: false,
+              enableVision: true,
               enableAudio: false,
             );
             debugPrint('✅ FFI client initialized successfully with $_selectedBackend backend');
@@ -344,7 +353,7 @@ class GemmaService {
                 modelPath: modelPath,
                 backend: 'cpu',  // Fall back to CPU
                 maxTokens: 2048,
-                enableVision: false,
+                enableVision: true,
                 enableAudio: false,
               );
               _ffiChat = _FFIChatWrapper(_ffiClient!);
@@ -441,6 +450,7 @@ class GemmaService {
   /// Send message and stream response token by token
   Future<void> sendWithStreaming({
     required String text,
+    List<Uint8List>? images,
     required Function(String) onToken,
     required Function(app_models.MessageStats) onComplete,
   }) async {
@@ -457,10 +467,14 @@ class GemmaService {
       int tokenCount = 0;
       final buffer = StringBuffer();
 
-      debugPrint('🚀 Sending: $text');
+      debugPrint('🚀 Sending: $text ${images?.length ?? 0} images');
 
       // Add user message to chat
-      await _chat.addQuery(app_models.AppMessage.text(text: text, isUser: true));
+      final message = images != null
+          ? app_models.AppMessage.multimodal(text: text, isUser: true, images: images)
+          : app_models.AppMessage.text(text: text, isUser: true);
+
+      await _chat.addQuery(message);
       
       // Stream responses token by token using generateChatResponseAsync
       final responseStream = _chat.generateChatResponseAsync();

@@ -3,6 +3,8 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 import 'services/gemma_service.dart';
 import 'models/chat_models.dart' as app_models;
 import 'services/settings_service.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +53,8 @@ class _ChatPageState extends State<ChatPage> {
   final List<app_models.ChatMessage> _messages = [];
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final ImagePicker _picker = ImagePicker();
+  List<Uint8List> _selectedImages = [];
 
   bool _isInitializing = true;
   bool _isGenerating = false;
@@ -63,6 +67,22 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _initializeModel();
+  }
+
+  Future<void> _pickImage() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      setState(() {
+        _selectedImages.add(bytes);
+      });
+    }
+  }
+
+  void _removeImage(int index) {
+    setState(() {
+      _selectedImages.removeAt(index);
+    });
   }
 
   Future<void> _initializeModel() async {
@@ -158,7 +178,11 @@ class _ChatPageState extends State<ChatPage> {
     _controller.clear();
 
     setState(() {
-      _messages.add(app_models.ChatMessage(isUser: true, content: text));
+      _messages.add(app_models.ChatMessage(
+        isUser: true,
+        content: text,
+        images: List.from(_selectedImages),
+      ));
       _isGenerating = true;
       _responseBuffer = '';
       _lastStats = null;
@@ -169,6 +193,7 @@ class _ChatPageState extends State<ChatPage> {
     try {
       await GemmaService.instance.sendWithStreaming(
         text: text,
+        images: _selectedImages,
         onToken: (token) {
           setState(() {
             _responseBuffer += token;
@@ -181,6 +206,7 @@ class _ChatPageState extends State<ChatPage> {
             _isGenerating = false;
             _responseBuffer = '';
             _lastStats = stats;
+            _selectedImages.clear();
           });
           _scrollToBottom();
         },
@@ -500,42 +526,99 @@ class _ChatPageState extends State<ChatPage> {
                 top: BorderSide(color: Colors.grey[800]!),
               ),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    decoration: InputDecoration(
-                      hintText: 'Type your message...',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(30),
-                        borderSide: BorderSide(
-                          color: Colors.grey[700]!,
-                        ),
-                      ),
-                      filled: true,
-                      fillColor: const Color(0xFF1E293B),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
+                if (_selectedImages.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12, left: 8),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: _selectedImages.asMap().entries.map((entry) {
+                          int index = entry.key;
+                          Uint8List bytes = entry.value;
+                          return Stack(
+                            children: [
+                              Container(
+                                margin: const EdgeInsets.only(right: 8),
+                                width: 60,
+                                height: 60,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(8),
+                                  image: DecorationImage(
+                                    image: MemoryImage(bytes),
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                right: 0,
+                                top: 0,
+                                child: GestureDetector(
+                                  onTap: () => _removeImage(index),
+                                  child: Container(
+                                    decoration: const BoxDecoration(
+                                      color: Colors.red,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.close,
+                                      size: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        }).toList(),
                       ),
                     ),
-                    enabled: !_isGenerating,
-                    maxLines: null,
-                    onSubmitted: (_) {
-                      if (!_isGenerating) _sendMessage();
-                    },
                   ),
-                ),
-                const SizedBox(width: 8),
-                FloatingActionButton(
-                  mini: true,
-                  backgroundColor: const Color(0xFF6366F1),
-                  onPressed: _isGenerating ? null : _sendMessage,
-                  child: Icon(
-                    Icons.send,
-                    color: _isGenerating ? Colors.grey : Colors.white,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        decoration: InputDecoration(
+                          hintText: 'Type your message...',
+                          prefixIcon: IconButton(
+                            icon: const Icon(Icons.image, color: Colors.grey),
+                            onPressed: _pickImage,
+                            tooltip: 'Pick Image',
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30),
+                            borderSide: BorderSide(
+                              color: Colors.grey[700]!,
+                            ),
+                          ),
+                          filled: true,
+                          fillColor: const Color(0xFF1E293B),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                        ),
+                        enabled: !_isGenerating,
+                        maxLines: null,
+                        onSubmitted: (_) {
+                          if (!_isGenerating) _sendMessage();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FloatingActionButton(
+                      mini: true,
+                      backgroundColor: const Color(0xFF6366F1),
+                      onPressed: _isGenerating ? null : _sendMessage,
+                      child: Icon(
+                        Icons.send,
+                        color: _isGenerating ? Colors.grey : Colors.white,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

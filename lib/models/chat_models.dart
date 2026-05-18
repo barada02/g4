@@ -1,9 +1,12 @@
+import 'dart:typed_data';
+
 /// Chat message model for history
 class ChatMessage {
   final bool isUser;
   final String content;
+  final List<Uint8List>? images;
 
-  ChatMessage({required this.isUser, required this.content});
+  ChatMessage({required this.isUser, required this.content, this.images});
 }
 
 /// Text response model (custom - different from flutter_gemma's TextResponse)
@@ -16,11 +19,20 @@ class AppTextResponse {
 class AppMessage {
   final String content;
   final bool isUser;
+  final List<Uint8List>? images;
 
-  AppMessage({required this.content, required this.isUser});
+  AppMessage({required this.content, required this.isUser, this.images});
 
   factory AppMessage.text({required String text, required bool isUser}) {
     return AppMessage(content: text, isUser: isUser);
+  }
+
+  factory AppMessage.multimodal({
+    required String text,
+    required bool isUser,
+    required List<Uint8List> images,
+  }) {
+    return AppMessage(content: text, isUser: isUser, images: images);
   }
 }
 
