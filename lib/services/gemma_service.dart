@@ -389,7 +389,8 @@ class GemmaService {
 
           // Register the downloaded model as the active model via platform channel
           try {
-            await _gemma.modelManager.setModelPath(modelPath);
+            // Use new API: FlutterGemma.installModel().fromFile() instead of deprecated setModelPath()
+            FlutterGemma.installModel(modelType: ModelType.gemmaIt).fromFile(modelPath);
             debugPrint('✅ Model registered and set as active');
           } catch (e) {
             debugPrint('❌ Failed to set active model: $e');
