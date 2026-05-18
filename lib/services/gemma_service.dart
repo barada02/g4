@@ -53,11 +53,27 @@ class _FFIChatWrapper {
       throw Exception('Last message must be from user');
     }
 
-    // Stream response from FFI client using chat() for plain text tokens
-    // (not chatRaw() which returns JSON chunks)
-    await for (final token in _client.chat(lastMessage['content'])) {
-      yield TextResponse(token: token);
+    // Use sendMessageStreamRaw for true token-by-token streaming from native callbacks
+    // This is the lowest-level streaming API that receives tokens directly from LiteRT-LM engine
+    final messageJson = LiteRtLmFfiClient.buildMessageJson(lastMessage['content']);
+    
+    String assistantResponse = '';
+    
+    await for (final jsonChunk in _client.sendMessageStreamRaw(messageJson)) {
+      // Each chunk is a raw SDK JSON response
+      // Extract text from JSON chunk
+      final textToken = LiteRtLmFfiClient.extractTextFromResponse(jsonChunk);
+      if (textToken.isNotEmpty) {
+        assistantResponse += textToken;
+        yield TextResponse(token: textToken);
+      }
     }
+    
+    // Add assistant response to history after streaming completes
+    _history.add({
+      'role': 'assistant',
+      'content': assistantResponse,
+    });
   }
 
   /// Clear conversation history
